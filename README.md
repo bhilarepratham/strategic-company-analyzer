@@ -40,26 +40,5 @@ I developed a Python-based web scraping application that aggregates strategic co
 5. Structured datasets to enable comparison across multiple companies
 6. Visualized insights using plots to highlight trends and competitive positioning
 
-## Demo Walkthrough (Based on Project Video)
-
-The demo video showcases the end-to-end workflow of the application. The process begins with selecting a target industry and defining company-level metrics for analysis. The application then executes Python-based web scraping scripts to collect publicly available data across multiple sources. Scraped data is processed and structured into tabular form, followed by visualization through comparative plots that highlight differences in market capitalization, company maturity, leadership structure, and market performance.
-
-The video demonstrates how automated data collection significantly reduces manual research effort and enables faster strategic insights through visual comparison.
-
-## Outcomes & Impact
-
-* Reduced manual research time by automating data collection across multiple sources
-* Enabled faster and more objective comparison of companies within an industry
-* Created a reusable framework for market intelligence and competitive analysis
-
-## Future Enhancements
-
-* Integration of APIs for real-time financial and stock market data
-* Expansion to support multiple industries and geographies
-* Dashboard-based visualization for interactive analysis
-* Enhanced error handling and compliance-focused scraping controls
-
-
----
 
 *This project demonstrates skills in web scraping, data analysis, automation, and strategic thinking, making it suitable for roles in data analysis, business analytics, and market intelligence.*
