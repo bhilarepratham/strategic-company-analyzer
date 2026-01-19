@@ -19,14 +19,14 @@ class CompanyDataCollector:
     def get_company_basic_info(self, symbol: str) -> Dict:
         """Get basic company information - simplified and reliable"""
         try:
-            print(f"🔍 Collecting data for {symbol}...")
+            print(f"   [INFO] Collecting data for {symbol}...")
             
             # Primary data from yfinance
             ticker = yf.Ticker(symbol)
             info = ticker.info
             
             if not info or len(info) < 5:
-                print(f"   ⚠️ Limited data available for {symbol}")
+                print(f"   [WARN] Limited data available for {symbol}")
                 return None
             
             # Extract and structure the data
@@ -62,13 +62,13 @@ class CompanyDataCollector:
                         if value and (not company_data.get(key) or company_data.get(key) in [0, 'N/A', '']):
                             company_data[key] = value
             except Exception as scrape_error:
-                print(f"   ⚠️ Web scraping failed for {symbol}, using API data only")
+                print(f"   [WARN] Web scraping failed for {symbol}, using API data only")
             
-            print(f"   ✅ Successfully collected data for {symbol}")
+            print(f"   [SUCCESS] Successfully collected data for {symbol}")
             return company_data
             
         except Exception as e:
-            print(f"   ❌ Error collecting data for {symbol}: {str(e)}")
+            print(f"   [ERROR] Error collecting data for {symbol}: {str(e)}")
             return None
     
     def _safe_get_number(self, info: dict, key: str, default=0) -> float:
@@ -133,11 +133,11 @@ class CompanyDataCollector:
             except:
                 pass
             
-            print(f"   🌐 Scraped {len(data)} additional fields from web")
+            print(f"   [WEB] Scraped {len(data)} additional fields from web")
             return data
             
         except Exception as e:
-            print(f"   ⚠️ Web scraping skipped: {str(e)}")
+            print(f"   [WARN] Web scraping skipped: {str(e)}")
             return {}
     
     def _parse_market_value(self, value_str: str) -> float:
@@ -159,25 +159,25 @@ class CompanyDataCollector:
     def get_stock_history(self, symbol: str, period: str = "1y") -> pd.DataFrame:
         """Get stock price history"""
         try:
-            print(f"   📊 Fetching stock history for {symbol}...")
+            print(f"   [DATA] Fetching stock history for {symbol}...")
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period)
             
             if not hist.empty:
                 hist['symbol'] = symbol
-                print(f"   ✅ Retrieved {len(hist)} days of stock data")
+                print(f"   [SUCCESS] Retrieved {len(hist)} days of stock data")
             else:
-                print(f"   ⚠️ No stock history available for {symbol}")
+                print(f"   [WARN] No stock history available for {symbol}")
             
             return hist
         except Exception as e:
-            print(f"   ❌ Error getting stock history: {str(e)}")
+            print(f"   [ERROR] Error getting stock history: {str(e)}")
             return pd.DataFrame()
     
     def get_executives(self, symbol: str) -> List[Dict]:
         """Get executive information"""
         try:
-            print(f"   👔 Fetching executive data for {symbol}...")
+            print(f"   [DATA] Fetching executive data for {symbol}...")
             ticker = yf.Ticker(symbol)
             info = ticker.info
             
@@ -190,20 +190,20 @@ class CompanyDataCollector:
                         'age': officer.get('age', 0),
                         'total_pay': officer.get('totalPay', 0)
                     })
-                print(f"   ✅ Found {len(executives)} executives")
+                print(f"   [SUCCESS] Found {len(executives)} executives")
             else:
-                print(f"   ⚠️ No executive data available")
+                print(f"   [WARN] No executive data available")
             
             return executives
             
         except Exception as e:
-            print(f"   ❌ Error getting executives: {str(e)}")
+            print(f"   [ERROR] Error getting executives: {str(e)}")
             return []
     
     def get_financial_ratios(self, symbol: str) -> Dict:
         """Get key financial ratios"""
         try:
-            print(f"   📈 Calculating financial ratios for {symbol}...")
+            print(f"   [DATA] Calculating financial ratios for {symbol}...")
             ticker = yf.Ticker(symbol)
             info = ticker.info
             
@@ -223,11 +223,11 @@ class CompanyDataCollector:
             }
             
             ratio_count = len([r for r in ratios.values() if r > 0])
-            print(f"   ✅ Calculated {ratio_count} financial ratios")
+            print(f"   [SUCCESS] Calculated {ratio_count} financial ratios")
             return ratios
             
         except Exception as e:
-            print(f"   ❌ Error getting ratios: {str(e)}")
+            print(f"   [ERROR] Error getting ratios: {str(e)}")
             return {}
     
     def search_companies_by_industry(self, industry: str) -> List[str]:
