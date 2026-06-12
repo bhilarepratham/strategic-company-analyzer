@@ -1,799 +1,290 @@
-import streamlit as st
+import yfinance as yf
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
 import time
-import sqlite3
-
-# Import our custom modules
-from data_collector import CompanyDataCollector
-from database_manager import DatabaseManager
-from visualizations import DataVisualizer
-
-# Page configuration
-st.set_page_config(
-    page_title="Strategic Company Data Analyzer",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Enhanced CSS for modern interface
-st.markdown("""
-<style>
-.main-header {
-    font-size: 3.5rem;
-    font-weight: 700;
-    background: linear-gradient(90deg, #1f77b4, #ff7f0e, #2ca02c);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    text-align: center;
-    margin-bottom: 2rem;
-}
-.metric-container {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 1.5rem;
-    border-radius: 15px;
-    color: white;
-    text-align: center;
-    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
-    margin: 0.5rem;
-}
-.metric-value {
-    font-size: 2rem;
-    font-weight: bold;
-    margin-bottom: 0.5rem;
-}
-.metric-label {
-    font-size: 0.9rem;
-    opacity: 0.8;
-}
-.stButton > button {
-    background: linear-gradient(45deg, #FE6B8B 30%, #FF8E53 90%);
-    color: white;
-    border: none;
-    border-radius: 25px;
-    padding: 0.75rem 2rem;
-    font-weight: bold;
-    transition: all 0.3s ease;
-}
-.info-box {
-    background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
-    padding: 1.5rem;
-    border-radius: 10px;
-    color: white;
-    margin: 1rem 0;
-}
-.success-box {
-    background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
-    padding: 1rem;
-    border-radius: 10px;
-    color: white;
-    margin: 0.5rem 0;
-}
-.error-box {
-    background: linear-gradient(135deg, #e17055 0%, #d63031 100%);
-    padding: 1rem;
-    border-radius: 10px;
-    color: white;
-    margin: 0.5rem 0;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# Initialize session state
-if 'db_manager' not in st.session_state:
-    st.session_state.db_manager = DatabaseManager()
-if 'data_collector' not in st.session_state:
-    st.session_state.data_collector = CompanyDataCollector()
-if 'visualizer' not in st.session_state:
-    st.session_state.visualizer = DataVisualizer()
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+import json
+import re
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
-def main():
-    st.markdown('''
-    <div class="main-header">
-        📊 Strategic Company Data Analyzer
-    </div>
-    <div style="text-align: center; margin-bottom: 2rem; color: #666;">
-        <i>Professional Financial Data Analysis &amp; Visualization Platform</i>
-    </div>
-    ''', unsafe_allow_html=True)
+class CompanyDataCollector:
 
-    st.sidebar.title("🚀 Navigation")
-    page = st.sidebar.selectbox(
-        "Choose a page:",
-        ["🏠 Dashboard", "📥 Data Collection", "📊 Visualizations", "🔍 Company Analysis"]
-    )
+    def __init__(self, alpha_vantage_key: str = None):
+        self.alpha_vantage_key = alpha_vantage_key
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
 
-    total_companies = st.session_state.db_manager.get_company_count()
-    st.sidebar.markdown(f"""
-    <div class="info-box">
-        <h4>📊 Quick Stats</h4>
-        <p>Total Companies: <strong>{total_companies}</strong></p>
-        <p>Status: <strong>Active</strong></p>
-    </div>
-    """, unsafe_allow_html=True)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Industry → ticker mapping  (expanded: 25 per sector)
+    # ─────────────────────────────────────────────────────────────────────────
+    INDUSTRY_MAP: Dict[str, List[str]] = {
+        "technology": [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "ORCL", "CRM",
+            "ADBE", "INTC", "AMD", "QCOM", "TXN", "AVGO", "AMAT", "MU",
+            "NOW", "SNOW", "PLTR", "NET", "DDOG", "ZS", "PANW", "CRWD", "UBER",
+        ],
+        "finance": [
+            "JPM", "BAC", "WFC", "GS", "MS", "C", "AXP", "BLK", "SCHW", "USB",
+            "PNC", "TFC", "COF", "SPGI", "MCO", "ICE", "CME", "CBOE", "V", "MA",
+            "PYPL", "FIS", "FISV", "DFS", "SYF",
+        ],
+        "healthcare": [
+            "JNJ", "PFE", "UNH", "ABT", "TMO", "MRK", "CVS", "DHR", "BMY", "LLY",
+            "AMGN", "GILD", "BIIB", "REGN", "VRTX", "ISRG", "BSX", "MDT", "SYK",
+            "BDX", "HCA", "CI", "HUM", "MCK", "ABC",
+        ],
+        "retail": [
+            "WMT", "HD", "COST", "TGT", "LOW", "SBUX", "NKE", "MCD", "DIS", "BKNG",
+            "ETSY", "EBAY", "ROST", "TJX", "DLTR", "DG", "YUM", "CMG",
+            "QSR", "DKNG", "ABNB", "EXPE", "LYFT", "DASH", "SNAP",
+        ],
+        "energy": [
+            "XOM", "CVX", "COP", "EOG", "SLB", "PSX", "VLO", "MPC", "OXY", "HAL",
+            "DVN", "PXD", "FANG", "HES", "MRO", "APA", "BKR", "NOV", "NEE", "DUK",
+            "SO", "D", "EXC", "PCG", "SRE",
+        ],
+        "automotive": [
+            "TSLA", "F", "GM", "TM", "HMC", "STLA", "NIO", "RIVN", "LCID", "LI",
+            "XPEV", "BWA", "ALV", "LEA", "MGA", "GT", "MOD", "APTV", "DAN", "RACE",
+            "VWAGY", "BMWYY", "POAHY", "MBGAF", "NSANY",
+        ],
+    }
 
-    if page == "🏠 Dashboard":
-        show_dashboard()
-    elif page == "📥 Data Collection":
-        show_data_collection()
-    elif page == "📊 Visualizations":
-        show_visualizations()
-    elif page == "🔍 Company Analysis":
-        show_company_analysis()
+    def search_companies_by_industry(self, industry: str) -> List[str]:
+        """Return the ticker list for a given industry."""
+        return self.INDUSTRY_MAP.get(industry.lower(), [])
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Core data fetch
+    # ─────────────────────────────────────────────────────────────────────────
+    def get_company_basic_info(self, symbol: str) -> Optional[Dict]:
+        """Get basic company information via yfinance + light scraping."""
+        try:
+            print(f"  [INFO] Collecting data for {symbol}...")
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DASHBOARD
-# ─────────────────────────────────────────────────────────────────────────────
-def show_dashboard():
-    st.markdown("## 🏠 Executive Dashboard")
+            if not info or len(info) < 5:
+                print(f"  [WARN] Limited data available for {symbol}")
+                return None
 
-    total_companies = st.session_state.db_manager.get_company_count()
-    all_companies_df = st.session_state.db_manager.get_all_companies()
+            company_data = {
+                "symbol": symbol.upper(),
+                "company_name": info.get("longName", info.get("shortName", symbol)),
+                "sector": info.get("sector", "N/A"),
+                "industry": info.get("industry", "N/A"),
+                "market_cap": self._safe_num(info, "marketCap"),
+                "enterprise_value": self._safe_num(info, "enterpriseValue"),
+                "revenue": self._safe_num(info, "totalRevenue"),
+                "employees": self._safe_num(info, "fullTimeEmployees"),
+                "founded_year": 0,
+                "headquarters": self._format_location(info),
+                "website": info.get("website", "N/A"),
+                "description": self._get_description(info),
+                "current_price": self._safe_num(info, "currentPrice"),
+                "previous_close": self._safe_num(info, "previousClose"),
+                "volume": self._safe_num(info, "volume"),
+                "avg_volume": self._safe_num(info, "averageVolume"),
+                "pe_ratio": self._safe_num(info, "trailingPE"),
+                "pb_ratio": self._safe_num(info, "priceToBook"),
+                "dividend_yield": self._safe_num(info, "dividendYield"),
+                "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f"""
-        <div class="metric-container">
-            <div style="font-size:2rem;">🏢</div>
-            <div class="metric-value">{total_companies}</div>
-            <div class="metric-label">Total Companies</div>
-        </div>""", unsafe_allow_html=True)
-
-    with col2:
-        sectors = all_companies_df['sector'].nunique() if not all_companies_df.empty else 0
-        st.markdown(f"""
-        <div class="metric-container">
-            <div style="font-size:2rem;">🏭</div>
-            <div class="metric-value">{sectors}</div>
-            <div class="metric-label">Unique Sectors</div>
-        </div>""", unsafe_allow_html=True)
-
-    with col3:
-        avg_cap = f"${all_companies_df['market_cap'].mean()/1e9:.1f}B" if not all_companies_df.empty else "N/A"
-        st.markdown(f"""
-        <div class="metric-container">
-            <div style="font-size:2rem;">💰</div>
-            <div class="metric-value">{avg_cap}</div>
-            <div class="metric-label">Avg Market Cap</div>
-        </div>""", unsafe_allow_html=True)
-
-    with col4:
-        st.markdown("""
-        <div class="metric-container">
-            <div style="font-size:2rem;">✅</div>
-            <div class="metric-value">Online</div>
-            <div class="metric-label">System Status</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    if not all_companies_df.empty:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("### 📈 Market Leaders")
-            fig = create_market_cap_chart(all_companies_df.head(10))
-            st.plotly_chart(fig, use_container_width=True)
-        with col2:
-            st.markdown("### 🎯 Industry Distribution")
-            fig = create_pie_chart(all_companies_df)
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.markdown("### 📋 Company Overview")
-        display_data_table(all_companies_df)
-    else:
-        st.markdown("""
-        <div class="info-box">
-            <h3>🚀 Welcome to Your Analytics Platform!</h3>
-            <p>Ready to start analyzing? Head over to <strong>Data Collection</strong> to gather your first dataset.</p>
-            <p>✨ <i>Pro tip: Start with the Technology sector for rich data!</i></p>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA COLLECTION
-# ─────────────────────────────────────────────────────────────────────────────
-def show_data_collection():
-    st.markdown("## 📥 Data Collection Center")
-
-    total_companies = st.session_state.db_manager.get_company_count()
-    progress_percentage = min((total_companies / 50) * 100, 100)
-
-    st.markdown(f"""
-    <div class="info-box">
-        <h4>📊 Collection Progress: {progress_percentage:.1f}%</h4>
-        <div style="background:rgba(255,255,255,0.3); border-radius:10px; overflow:hidden;">
-            <div style="width:{progress_percentage}%; height:20px;
-                        background:linear-gradient(90deg,#00b894,#00a085);"></div>
-        </div>
-        <p style="margin-top:10px;">Target: 50 companies | Current: {total_companies} companies</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown("### 🏭 Select Target Industry")
-        industries = {
-            "technology": "🖥️ Technology (AI, Software, Hardware) — 25 companies",
-            "finance":    "💼 Finance (Banks, Investment) — 25 companies",
-            "healthcare": "🏥 Healthcare (Pharma, Medical) — 25 companies",
-            "retail":     "🛒 Retail (E-commerce, Consumer) — 25 companies",
-            "energy":     "⚡ Energy (Oil, Gas, Renewable) — 25 companies",
-            "automotive": "🚗 Automotive (Auto, EV, Parts) — 25 companies",
-        }
-        industry = st.selectbox(
-            "Choose industry:",
-            list(industries.keys()),
-            format_func=lambda x: industries[x]
-        )
-
-    with col2:
-        st.markdown("### 📊 Quick Stats")
-        st.info("**Available:** 25 companies")
-        st.info("**Data Points:** 20+")
-        st.info("**Update:** Real-time")
-
-    st.markdown("### 🎯 Custom Company Analysis")
-    custom_symbols = st.text_input(
-        "Enter stock symbols (comma-separated):",
-        placeholder="AAPL, MSFT, GOOGL, TSLA",
-        help="Add any publicly traded companies"
-    )
-
-    # ── Action buttons (3 columns now) ───────────────────────────────────────
-    st.markdown("### 🚀 Data Collection Actions")
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button(f"📊 Collect {industry.title()} Data", type="primary", use_container_width=True):
-            collect_industry_data(industry)
-
-    with col2:
-        if st.button("🎯 Collect Custom Data", disabled=not custom_symbols, use_container_width=True):
-            symbols = [s.strip().upper() for s in custom_symbols.split(',')]
-            collect_custom_data(symbols)
-
-    with col3:
-        if st.button(
-            "🔄 Refresh Prices",
-            help="Re-fetch current price & market data for all existing companies",
-            use_container_width=True,
-        ):
-            refresh_prices()
-
-    # Stale-data warning banner
-    df_existing = st.session_state.db_manager.get_all_companies()
-    if not df_existing.empty:
-        stale_count = df_existing["last_updated"].apply(
-            lambda ts: st.session_state.data_collector.needs_refresh(ts, hours=24)
-        ).sum()
-        if stale_count > 0:
-            st.warning(
-                f"⚠️ {stale_count} companies have data older than 24 hours. "
-                "Click **🔄 Refresh Prices** to update them."
-            )
-
-
-def refresh_prices():
-    """Re-fetch current price / market-cap / PE for every stale company in the DB."""
-    df = st.session_state.db_manager.get_all_companies()
-    if df.empty:
-        st.warning("No companies in the database yet.")
-        return
-
-    stale = df[
-        df["last_updated"].apply(
-            lambda ts: st.session_state.data_collector.needs_refresh(ts, hours=24)
-        )
-    ]
-
-    if stale.empty:
-        st.success("✅ All data is up-to-date (refreshed within the last 24 hours).")
-        return
-
-    st.info(f"🔄 Refreshing {len(stale)} stale companies…")
-    progress = st.progress(0)
-    status = st.empty()
-    refreshed = 0
-
-    for i, row in enumerate(stale.itertuples(), 1):
-        progress.progress(i / len(stale))
-        status.text(f"Refreshing {row.symbol}… ({i}/{len(stale)})")
-
-        fresh = st.session_state.data_collector.refresh_company_data(row.symbol)
-        if fresh:
-            conn = sqlite3.connect(st.session_state.db_manager.db_path)
-            conn.execute(
-                """
-                UPDATE companies
-                SET current_price=?, previous_close=?, volume=?, avg_volume=?,
-                    market_cap=?, pe_ratio=?, pb_ratio=?, dividend_yield=?, last_updated=?
-                WHERE symbol=?
-                """,
-                (
-                    fresh["current_price"], fresh["previous_close"],
-                    fresh["volume"],        fresh["avg_volume"],
-                    fresh["market_cap"],    fresh["pe_ratio"],
-                    fresh["pb_ratio"],      fresh["dividend_yield"],
-                    fresh["last_updated"],  fresh["symbol"],
-                ),
-            )
-            conn.commit()
-            conn.close()
-
-            # Also refresh stock history so charts stay current
+            # Light scrape for any gaps
             try:
-                hist = st.session_state.data_collector.get_stock_history(row.symbol)
-                if not hist.empty:
-                    st.session_state.db_manager.insert_stock_history(row.symbol, hist)
+                scraped = self.scrape_yahoo_finance_safe(symbol)
+                for key, value in scraped.items():
+                    if value and company_data.get(key) in [0, "N/A", "", None]:
+                        company_data[key] = value
             except Exception:
                 pass
 
-            refreshed += 1
-        time.sleep(0.3)
-
-    progress.progress(1.0)
-    status.empty()
-    st.success(f"✅ Refreshed {refreshed} / {len(stale)} companies.")
-
-
-def collect_industry_data(industry):
-    companies = st.session_state.data_collector.search_companies_by_industry(industry)
-    if not companies:
-        st.error("No companies found!")
-        return
-
-    st.markdown(f"""
-    <div class="info-box">
-        <h4>🌐 Data Collection in Progress</h4>
-        <p>Collecting from: Yahoo Finance API + Web Scraping</p>
-        <p>Companies to process: {len(companies)}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    col1, col2, col3 = st.columns(3)
-    success_metric = col1.empty()
-    failed_metric = col2.empty()
-    current_metric = col3.empty()
-    details = st.expander("📋 Collection Details", expanded=False)
-
-    successful = 0
-    failed = 0
-    failed_companies = []
-
-    for i, symbol in enumerate(companies):
-        progress = (i + 1) / len(companies)
-        progress_bar.progress(progress)
-        status_text.markdown(f"""
-        <div style="text-align:center; padding:1rem; background:rgba(255,255,255,0.1); border-radius:10px;">
-            <h4>🔄 Processing: {symbol}</h4>
-            <p>Company {i+1} of {len(companies)}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        success_metric.metric("✅ Success", successful)
-        failed_metric.metric("❌ Failed", failed)
-        current_metric.metric("📊 Progress", f"{i+1}/{len(companies)}")
-
-        try:
-            with details:
-                st.write(f"**Processing {symbol}...**")
-
-            company_data = st.session_state.data_collector.get_company_basic_info(symbol)
-            if company_data:
-                st.session_state.db_manager.insert_company_data(company_data)
-
-                try:
-                    executives = st.session_state.data_collector.get_executives(symbol)
-                    if executives:
-                        st.session_state.db_manager.insert_executives(symbol, executives)
-                except Exception as e:
-                    with details:
-                        st.warning(f"Executives skipped for {symbol}: {e}")
-
-                try:
-                    ratios = st.session_state.data_collector.get_financial_ratios(symbol)
-                    if ratios:
-                        st.session_state.db_manager.insert_financial_ratios(symbol, ratios)
-                except Exception as e:
-                    with details:
-                        st.warning(f"Ratios skipped for {symbol}: {e}")
-
-                try:
-                    stock_history = st.session_state.data_collector.get_stock_history(symbol)
-                    if not stock_history.empty:
-                        st.session_state.db_manager.insert_stock_history(symbol, stock_history)
-                except Exception as e:
-                    with details:
-                        st.warning(f"Stock history skipped for {symbol}: {e}")
-
-                successful += 1
-                with details:
-                    st.success(f"✅ {symbol} — Data collected successfully")
-            else:
-                failed += 1
-                failed_companies.append(symbol)
-                with details:
-                    st.warning(f"⚠️ {symbol} — Could not retrieve data")
-
-            time.sleep(0.5)
+            print(f"  [SUCCESS] Collected data for {symbol}")
+            return company_data
 
         except Exception as e:
-            failed += 1
-            failed_companies.append(symbol)
-            with details:
-                st.error(f"❌ {symbol} — Error: {str(e)}")
+            print(f"  [ERROR] {symbol}: {e}")
+            return None
 
-    progress_bar.progress(1.0)
-
-    if successful > 0:
-        status_text.markdown(f"""
-        <div class="success-box">
-            <h3>✅ Collection Complete!</h3>
-            <p>Successfully collected: {successful} companies</p>
-            <p>Failed: {failed} companies</p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        status_text.markdown("""
-        <div class="error-box">
-            <h3>❌ Collection Failed</h3>
-            <p>No data could be collected. Please check your internet connection.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    if failed_companies:
-        with details:
-            st.warning(f"Failed companies: {', '.join(failed_companies)}")
-
-    success_metric.metric("✅ Success", successful)
-    failed_metric.metric("❌ Failed", failed)
-    current_metric.metric("📊 Complete", "100%")
-
-
-def collect_custom_data(symbols):
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    successful = 0
-    failed = 0
-
-    for i, symbol in enumerate(symbols):
-        progress_bar.progress((i + 1) / len(symbols))
-        status_text.text(f"Processing {symbol}… ({i+1}/{len(symbols)})")
+    # ─────────────────────────────────────────────────────────────────────────
+    # REFRESH – update price/volume for companies already in the DB
+    # ─────────────────────────────────────────────────────────────────────────
+    def refresh_company_data(self, symbol: str) -> Optional[Dict]:
+        """
+        Lightweight refresh: fetch only the fast-moving fields
+        (price, volume, market_cap, pe_ratio) without re-scraping everything.
+        """
         try:
-            company_data = st.session_state.data_collector.get_company_basic_info(symbol)
-            if company_data:
-                st.session_state.db_manager.insert_company_data(company_data)
-                successful += 1
-            else:
-                failed += 1
-            time.sleep(0.5)
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            if not info:
+                return None
+
+            return {
+                "symbol": symbol.upper(),
+                "current_price": self._safe_num(info, "currentPrice"),
+                "previous_close": self._safe_num(info, "previousClose"),
+                "volume": self._safe_num(info, "volume"),
+                "avg_volume": self._safe_num(info, "averageVolume"),
+                "market_cap": self._safe_num(info, "marketCap"),
+                "pe_ratio": self._safe_num(info, "trailingPE"),
+                "pb_ratio": self._safe_num(info, "priceToBook"),
+                "dividend_yield": self._safe_num(info, "dividendYield"),
+                "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
         except Exception as e:
-            failed += 1
-            st.warning(f"Error with {symbol}: {str(e)}")
+            print(f"  [ERROR] Refresh failed for {symbol}: {e}")
+            return None
 
-    progress_bar.progress(1.0)
-    status_text.success(f"✅ Complete! Success: {successful}, Failed: {failed}")
+    def needs_refresh(self, last_updated_str: str, hours: int = 24) -> bool:
+        """Return True if data is older than `hours` hours."""
+        try:
+            last = datetime.strptime(last_updated_str, "%Y-%m-%d %H:%M:%S")
+            return datetime.now() - last > timedelta(hours=hours)
+        except Exception:
+            return True  # if we can't parse, treat as stale
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Stock history
+    # ─────────────────────────────────────────────────────────────────────────
+    def get_stock_history(self, symbol: str, period: str = "1y") -> pd.DataFrame:
+        try:
+            print(f"  [DATA] Fetching stock history for {symbol}...")
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period=period)
+            if not hist.empty:
+                hist["symbol"] = symbol
+                print(f"  [SUCCESS] Retrieved {len(hist)} days of stock data")
+            else:
+                print(f"  [WARN] No stock history available for {symbol}")
+            return hist
+        except Exception as e:
+            print(f"  [ERROR] Stock history for {symbol}: {e}")
+            return pd.DataFrame()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VISUALIZATIONS
-# ─────────────────────────────────────────────────────────────────────────────
-def show_visualizations():
-    st.markdown("## 📊 Data Visualizations")
-    df = st.session_state.db_manager.get_all_companies()
+    # ─────────────────────────────────────────────────────────────────────────
+    # Executives & ratios
+    # ─────────────────────────────────────────────────────────────────────────
+    def get_executives(self, symbol: str) -> List[Dict]:
+        try:
+            print(f"  [DATA] Fetching executive data for {symbol}...")
+            info = yf.Ticker(symbol).info
+            executives = []
+            for officer in info.get("companyOfficers", [])[:5]:
+                executives.append({
+                    "name": officer.get("name", "N/A"),
+                    "title": officer.get("title", "N/A"),
+                    "age": officer.get("age", 0),
+                    "total_pay": officer.get("totalPay", 0),
+                })
+            print(f"  [SUCCESS] Found {len(executives)} executives")
+            return executives
+        except Exception as e:
+            print(f"  [ERROR] Executives for {symbol}: {e}")
+            return []
 
-    if df.empty:
-        st.markdown("""
-        <div class="info-box">
-            <h3>📝 No Data Available</h3>
-            <p>Please collect some company data first!</p>
-        </div>
-        """, unsafe_allow_html=True)
-        return
+    def get_financial_ratios(self, symbol: str) -> Dict:
+        try:
+            print(f"  [DATA] Calculating financial ratios for {symbol}...")
+            info = yf.Ticker(symbol).info
+            ratios = {
+                "pe_ratio": self._safe_num(info, "trailingPE"),
+                "forward_pe": self._safe_num(info, "forwardPE"),
+                "peg_ratio": self._safe_num(info, "pegRatio"),
+                "price_to_sales": self._safe_num(info, "priceToSalesTrailing12Months"),
+                "price_to_book": self._safe_num(info, "priceToBook"),
+                "debt_to_equity": self._safe_num(info, "debtToEquity"),
+                "roe": self._safe_num(info, "returnOnEquity"),
+                "roa": self._safe_num(info, "returnOnAssets"),
+                "profit_margin": self._safe_num(info, "profitMargins"),
+                "operating_margin": self._safe_num(info, "operatingMargins"),
+                "current_ratio": self._safe_num(info, "currentRatio"),
+                "quick_ratio": self._safe_num(info, "quickRatio"),
+            }
+            ratio_count = len([r for r in ratios.values() if r > 0])
+            print(f"  [SUCCESS] Calculated {ratio_count} financial ratios")
+            return ratios
+        except Exception as e:
+            print(f"  [ERROR] Ratios for {symbol}: {e}")
+            return {}
 
-    viz_type = st.selectbox(
-        "Choose Visualization:",
-        ["Market Cap Analysis", "Industry Analysis", "Performance Dashboard"]
-    )
+    # ─────────────────────────────────────────────────────────────────────────
+    # Web scraping helper
+    # ─────────────────────────────────────────────────────────────────────────
+    def scrape_yahoo_finance_safe(self, symbol: str) -> Dict:
+        try:
+            url = f"https://finance.yahoo.com/quote/{symbol}"
+            response = self.session.get(url, timeout=5)
+            if response.status_code != 200:
+                return {}
+            soup = BeautifulSoup(response.content, "html.parser")
+            data = {}
+            try:
+                el = soup.find("fin-streamer", {"data-field": "regularMarketPrice"})
+                if el and el.text:
+                    data["current_price"] = float(el.text.replace(",", ""))
+            except Exception:
+                pass
+            try:
+                for el in soup.find_all("td", {"data-test": "MARKET_CAP-value"}):
+                    if el.text:
+                        data["market_cap"] = self._parse_market_value(el.text)
+                        break
+            except Exception:
+                pass
+            print(f"  [WEB] Scraped {len(data)} additional fields from web")
+            return data
+        except Exception as e:
+            print(f"  [WARN] Web scraping skipped for {symbol}: {e}")
+            return {}
 
-    if viz_type == "Market Cap Analysis":
-        show_market_cap_analysis(df)
-    elif viz_type == "Industry Analysis":
-        show_industry_analysis(df)
-    elif viz_type == "Performance Dashboard":
-        show_performance_dashboard(df)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Utilities
+    # ─────────────────────────────────────────────────────────────────────────
+    def _safe_num(self, info: dict, key: str, default: float = 0) -> float:
+        try:
+            v = info.get(key, default)
+            return float(v) if v is not None else default
+        except (ValueError, TypeError):
+            return default
 
+    # Keep old name for backward compatibility
+    def _safe_get_number(self, info, key, default=0):
+        return self._safe_num(info, key, default)
 
-def show_market_cap_analysis(df):
-    st.subheader("💰 Market Cap Analysis")
-    fig = create_market_cap_chart(df.head(15))
-    st.plotly_chart(fig, use_container_width=True)
+    def _format_location(self, info: dict) -> str:
+        try:
+            parts = [p for p in [info.get("city"), info.get("state"), info.get("country")] if p]
+            return ", ".join(parts) or "N/A"
+        except Exception:
+            return "N/A"
 
+    def _get_description(self, info: dict) -> str:
+        try:
+            desc = info.get("longBusinessSummary", "")
+            if desc:
+                return desc[:500] + ("..." if len(desc) > 500 else "")
+            return info.get("description", "N/A")
+        except Exception:
+            return "N/A"
 
-def show_industry_analysis(df):
-    st.subheader("🏭 Industry Analysis")
-    fig = create_pie_chart(df)
-    st.plotly_chart(fig, use_container_width=True)
+    def _parse_market_value(self, value_str: str) -> float:
+        try:
+            s = value_str.strip().upper().replace("$", "").replace(",", "")
+            if "T" in s:
+                return float(s.replace("T", "")) * 1e12
+            elif "B" in s:
+                return float(s.replace("B", "")) * 1e9
+            elif "M" in s:
+                return float(s.replace("M", "")) * 1e6
+            return float(s)
+        except Exception:
+            return 0
 
-    st.subheader("📊 Industry Metrics")
-    industry_metrics = df.groupby('industry').agg({
-        'market_cap': ['count', 'mean'],
-        'revenue': 'mean',
-        'employees': 'mean'
-    }).round(2)
-    st.dataframe(industry_metrics, use_container_width=True)
-
-
-def show_performance_dashboard(df):
-    st.subheader("🎯 Performance Dashboard")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("#### 💰 Market Cap vs Revenue")
-        df_viz = df.copy()
-        df_viz['market_cap_billions'] = df_viz['market_cap'] / 1e9
-        df_viz['revenue_billions'] = df_viz['revenue'] / 1e9
-        df_viz = df_viz[(df_viz['market_cap_billions'] > 0) & (df_viz['revenue_billions'] > 0)]
-        if not df_viz.empty:
-            fig = px.scatter(
-                df_viz,
-                x='revenue_billions',
-                y='market_cap_billions',
-                size='employees',
-                color='sector',
-                hover_name='company_name',
-                title="Market Cap vs Revenue",
-                labels={
-                    'revenue_billions': 'Revenue (Billions USD)',
-                    'market_cap_billions': 'Market Cap (Billions USD)'
-                }
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.markdown("#### 📊 P/E Ratio Distribution")
-        pe_data = df[(df['pe_ratio'] > 0) & (df['pe_ratio'] < 100)]
-        if not pe_data.empty:
-            fig = px.histogram(pe_data, x='pe_ratio', nbins=20, title="P/E Ratio Distribution")
-            st.plotly_chart(fig, use_container_width=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# COMPANY ANALYSIS  (with stock price chart)
-# ─────────────────────────────────────────────────────────────────────────────
-def show_company_analysis():
-    st.markdown("## 🔍 Company Analysis")
-
-    df = st.session_state.db_manager.get_all_companies()
-    if df.empty:
-        st.info("No companies available. Please collect data first!")
-        return
-
-    selected_company = st.selectbox(
-        "Select Company:",
-        df["symbol"].tolist(),
-        format_func=lambda x: f"{x} – {df[df['symbol']==x]['company_name'].iloc[0]}",
-    )
-
-    if not selected_company:
-        return
-
-    company_data = df[df["symbol"] == selected_company].iloc[0]
-
-    # Hero banner
-    st.markdown(
-        f"""
-        <div style="text-align:center; padding:2rem;
-                    background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
-                    border-radius:15px; color:white; margin-bottom:2rem;">
-            <h1>🏢 {company_data['company_name']}</h1>
-            <h3>({selected_company})</h3>
-            <p>{company_data['sector']} | {company_data['industry']}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Key metrics row
-    col1, col2, col3, col4 = st.columns(4)
-    metrics = [
-        ("Market Cap", f"${company_data['market_cap']/1e9:.1f}B"  if company_data['market_cap']  > 0 else "N/A", "💰"),
-        ("Revenue",    f"${company_data['revenue']/1e9:.1f}B"     if company_data['revenue']     > 0 else "N/A", "📈"),
-        ("Employees",  f"{company_data['employees']:,.0f}"         if company_data['employees']   > 0 else "N/A", "👥"),
-        ("P/E Ratio",  f"{company_data['pe_ratio']:.2f}"           if company_data['pe_ratio']    > 0 else "N/A", "📊"),
-    ]
-    for col, (label, value, icon) in zip([col1, col2, col3, col4], metrics):
-        with col:
-            st.markdown(
-                f"""
-                <div class="metric-container">
-                    <div style="font-size:2rem;">{icon}</div>
-                    <div class="metric-value">{value}</div>
-                    <div class="metric-label">{label}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("---")
-
-    # ── Stock price chart ─────────────────────────────────────────────────────
-    st.markdown("### 📈 Stock Price History")
-
-    history_df = st.session_state.db_manager.get_stock_history_by_symbol(selected_company)
-
-    if history_df.empty:
-        st.info(
-            "No price history in the database for this company yet. "
-            "Re-run data collection to populate it."
-        )
-    else:
-        history_df["date"] = pd.to_datetime(history_df["date"])
-        history_df = history_df.sort_values("date")
-
-        # Time-range selector
-        range_options = {"1 Month": 30, "3 Months": 90, "6 Months": 180, "All": None}
-        selected_range = st.radio(
-            "Time range:", list(range_options.keys()), horizontal=True, index=2
-        )
-        days = range_options[selected_range]
-        if days:
-            cutoff = history_df["date"].max() - pd.Timedelta(days=days)
-            history_df = history_df[history_df["date"] >= cutoff]
-
-        start_price = history_df["close_price"].iloc[0]
-        end_price   = history_df["close_price"].iloc[-1]
-        line_color  = "#00b894" if end_price >= start_price else "#e17055"
-        fill_rgb    = "0,184,148" if line_color == "#00b894" else "225,112,85"
-
-        chart_type = st.radio("Chart type:", ["Line", "Candlestick"], horizontal=True)
-
-        if chart_type == "Line":
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=history_df["date"],
-                y=history_df["close_price"],
-                mode="lines",
-                name="Close Price",
-                line=dict(color=line_color, width=2),
-                fill="tozeroy",
-                fillcolor=f"rgba({fill_rgb},0.08)",
-            ))
-        else:
-            fig = go.Figure(data=[go.Candlestick(
-                x=history_df["date"],
-                open=history_df["open_price"],
-                high=history_df["high_price"],
-                low=history_df["low_price"],
-                close=history_df["close_price"],
-                name=selected_company,
-            )])
-
-        pct_change = ((end_price - start_price) / start_price) * 100
-        sign = "+" if pct_change >= 0 else ""
-
-        fig.update_layout(
-            title=dict(
-                text=(
-                    f"{company_data['company_name']} ({selected_company})  "
-                    f"<span style='color:{line_color}'>{sign}{pct_change:.1f}%</span>"
-                ),
-                font=dict(size=16),
-            ),
-            xaxis_title="Date",
-            yaxis_title="Price (USD)",
-            height=420,
-            hovermode="x unified",
-            xaxis_rangeslider_visible=(chart_type == "Candlestick"),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Volume bar chart
-        st.markdown("#### 📊 Trading Volume")
-        vol_fig = go.Figure(go.Bar(
-            x=history_df["date"],
-            y=history_df["volume"],
-            marker_color=line_color,
-            opacity=0.6,
-            name="Volume",
-        ))
-        vol_fig.update_layout(
-            height=180,
-            margin=dict(t=10, b=10),
-            xaxis_title="",
-            yaxis_title="Volume",
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(vol_fig, use_container_width=True)
-
-    st.markdown("---")
-
-    # Detailed info
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Company Information")
-        st.write(f"**Sector:** {company_data['sector']}")
-        st.write(f"**Industry:** {company_data['industry']}")
-        st.write(f"**Headquarters:** {company_data['headquarters']}")
-        st.write(f"**Website:** {company_data['website']}")
-
-    with col2:
-        st.subheader("Financial Metrics")
-        st.write(
-            f"**Current Price:** ${company_data['current_price']:.2f}"
-            if company_data["current_price"] > 0
-            else "**Current Price:** N/A"
-        )
-        st.write(
-            f"**Volume:** {company_data['volume']:,.0f}"
-            if company_data["volume"] > 0
-            else "**Volume:** N/A"
-        )
-        st.write(
-            f"**P/B Ratio:** {company_data['pb_ratio']:.2f}"
-            if company_data["pb_ratio"] > 0
-            else "**P/B Ratio:** N/A"
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CHART HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def create_market_cap_chart(df):
-    df_viz = df.copy()
-    df_viz['market_cap_billions'] = df_viz['market_cap'] / 1e9
-    df_viz = df_viz.sort_values('market_cap_billions', ascending=True).tail(10)
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=df_viz['market_cap_billions'],
-        y=df_viz['symbol'],
-        orientation='h',
-        marker=dict(color=df_viz['market_cap_billions'], colorscale='Viridis')
-    ))
-    fig.update_layout(
-        title="Market Cap Leaders",
-        xaxis_title="Market Cap (Billions USD)",
-        height=400
-    )
-    return fig
-
-
-def create_pie_chart(df):
-    industry_counts = df['industry'].value_counts().head(8)
-    fig = go.Figure(data=[go.Pie(
-        labels=industry_counts.index,
-        values=industry_counts.values,
-        hole=0.4
-    )])
-    fig.update_layout(title="Industry Distribution", height=400)
-    return fig
-
-
-def display_data_table(df):
-    display_df = df.head(10).copy()
-    if 'market_cap' in display_df.columns:
-        display_df['Market Cap'] = display_df['market_cap'].apply(
-            lambda x: f"${x/1e9:.1f}B" if x > 0 else "N/A"
-        )
-    columns = ['symbol', 'company_name', 'sector', 'Market Cap']
-    available_columns = [col for col in columns if col in display_df.columns]
-    st.dataframe(display_df[available_columns], use_container_width=True, height=400)
-
-
-if __name__ == "__main__":
-    main()
+    def rate_limit_wait(self, seconds: float = 1):
+        time.sleep(seconds)
