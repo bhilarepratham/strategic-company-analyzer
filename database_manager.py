@@ -5,17 +5,17 @@ import json
 from datetime import datetime
 import os
 
+
 class DatabaseManager:
+
     def __init__(self, db_path: str = "company_data.db"):
         self.db_path = db_path
         self.ensure_valid_database()
         self.init_database()
-    
+
     def ensure_valid_database(self):
-        """Check if database is valid, delete if corrupted"""
         if os.path.exists(self.db_path):
             try:
-                # Try to connect to check if valid
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -29,14 +29,12 @@ class DatabaseManager:
                     print("✅ Corrupted database deleted")
                 except Exception as del_error:
                     print(f"❌ Could not delete database: {del_error}")
-    
+
     def init_database(self):
-        """Initialize database with required tables"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Companies table
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS companies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,8 +61,7 @@ class DatabaseManager:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # Stock history table
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stock_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,8 +75,7 @@ class DatabaseManager:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # Executives table
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS executives (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,8 +87,7 @@ class DatabaseManager:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # Financial ratios table
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS financial_ratios (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,31 +107,27 @@ class DatabaseManager:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
+
             conn.commit()
             conn.close()
             print("✅ Database initialized successfully")
-            
         except Exception as e:
             print(f"❌ Error initializing database: {e}")
-            # If initialization fails, try to delete and recreate
             if os.path.exists(self.db_path):
                 try:
                     os.remove(self.db_path)
                     print("🔄 Deleted problematic database, please restart the app")
-                except:
+                except Exception:
                     pass
-    
+
     def insert_company_data(self, company_data: Dict) -> bool:
-        """Insert or update company data"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('''
-                INSERT OR REPLACE INTO companies 
-                (symbol, company_name, sector, industry, market_cap, enterprise_value, revenue, 
-                 employees, founded_year, headquarters, website, description, current_price, 
+                INSERT OR REPLACE INTO companies
+                (symbol, company_name, sector, industry, market_cap, enterprise_value, revenue,
+                 employees, founded_year, headquarters, website, description, current_price,
                  previous_close, volume, avg_volume, pe_ratio, pb_ratio, dividend_yield, last_updated)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
@@ -161,26 +152,21 @@ class DatabaseManager:
                 company_data.get('dividend_yield', 0),
                 company_data.get('last_updated', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             ))
-            
             conn.commit()
             conn.close()
             return True
-            
         except Exception as e:
             print(f"Error inserting company data: {str(e)}")
             return False
-    
+
     def insert_stock_history(self, symbol: str, stock_df: pd.DataFrame) -> bool:
-        """Insert stock history data"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('DELETE FROM stock_history WHERE symbol = ?', (symbol,))
-            
             for date, row in stock_df.iterrows():
                 cursor.execute('''
-                    INSERT INTO stock_history 
+                    INSERT INTO stock_history
                     (symbol, date, open_price, high_price, low_price, close_price, volume)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', (
@@ -192,23 +178,18 @@ class DatabaseManager:
                     float(row.get('Close', 0)),
                     int(row.get('Volume', 0))
                 ))
-            
             conn.commit()
             conn.close()
             return True
-            
         except Exception as e:
             print(f"Error inserting stock history: {str(e)}")
             return False
-    
+
     def insert_executives(self, symbol: str, executives: List[Dict]) -> bool:
-        """Insert executive data"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('DELETE FROM executives WHERE symbol = ?', (symbol,))
-            
             for exec_data in executives:
                 cursor.execute('''
                     INSERT INTO executives (symbol, name, title, age, total_pay)
@@ -220,25 +201,20 @@ class DatabaseManager:
                     exec_data.get('age', 0),
                     exec_data.get('total_pay', 0)
                 ))
-            
             conn.commit()
             conn.close()
             return True
-            
         except Exception as e:
             print(f"Error inserting executives: {str(e)}")
             return False
-    
+
     def insert_financial_ratios(self, symbol: str, ratios: Dict) -> bool:
-        """Insert financial ratios data"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('DELETE FROM financial_ratios WHERE symbol = ?', (symbol,))
-            
             cursor.execute('''
-                INSERT INTO financial_ratios 
+                INSERT INTO financial_ratios
                 (symbol, pe_ratio, forward_pe, peg_ratio, price_to_sales, price_to_book,
                  debt_to_equity, roe, roa, profit_margin, operating_margin, current_ratio, quick_ratio)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -257,33 +233,27 @@ class DatabaseManager:
                 ratios.get('current_ratio', 0),
                 ratios.get('quick_ratio', 0)
             ))
-            
             conn.commit()
             conn.close()
             return True
-            
         except Exception as e:
             print(f"Error inserting ratios: {str(e)}")
             return False
-    
+
     def get_companies_by_industry(self, industry: str) -> pd.DataFrame:
-        """Get all companies in a specific industry"""
         try:
             conn = sqlite3.connect(self.db_path)
-            query = '''
-                SELECT * FROM companies 
-                WHERE industry LIKE ? OR sector LIKE ?
-                ORDER BY market_cap DESC
-            '''
-            df = pd.read_sql_query(query, conn, params=[f'%{industry}%', f'%{industry}%'])
+            df = pd.read_sql_query(
+                'SELECT * FROM companies WHERE industry LIKE ? OR sector LIKE ? ORDER BY market_cap DESC',
+                conn, params=[f'%{industry}%', f'%{industry}%']
+            )
             conn.close()
             return df
         except Exception as e:
             print(f"Error getting companies by industry: {str(e)}")
             return pd.DataFrame()
-    
+
     def get_all_companies(self) -> pd.DataFrame:
-        """Get all companies from database"""
         try:
             conn = sqlite3.connect(self.db_path)
             df = pd.read_sql_query('SELECT * FROM companies ORDER BY market_cap DESC', conn)
@@ -292,21 +262,36 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error getting all companies: {str(e)}")
             return pd.DataFrame()
-    
+
     def get_stock_history_by_symbol(self, symbol: str) -> pd.DataFrame:
-        """Get stock history for a specific symbol"""
         try:
             conn = sqlite3.connect(self.db_path)
-            query = 'SELECT * FROM stock_history WHERE symbol = ? ORDER BY date'
-            df = pd.read_sql_query(query, conn, params=[symbol])
+            df = pd.read_sql_query(
+                'SELECT * FROM stock_history WHERE symbol = ? ORDER BY date',
+                conn, params=[symbol]
+            )
             conn.close()
             return df
         except Exception as e:
             print(f"Error getting stock history: {str(e)}")
             return pd.DataFrame()
-    
+
+    # ── NEW: fetch executives for a given symbol ──────────────────────────────
+    def get_executives_by_symbol(self, symbol: str) -> pd.DataFrame:
+        """Return executives for a company as a DataFrame, or empty if none."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            df = pd.read_sql_query(
+                'SELECT name, title, age, total_pay FROM executives WHERE symbol = ? ORDER BY total_pay DESC',
+                conn, params=[symbol]
+            )
+            conn.close()
+            return df
+        except Exception as e:
+            print(f"Error getting executives for {symbol}: {str(e)}")
+            return pd.DataFrame()
+
     def get_company_count(self) -> int:
-        """Get total number of companies in database"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
