@@ -525,69 +525,198 @@ def show_performance_dashboard(df):
             )
             st.plotly_chart(fig, use_container_width=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH: Replace the existing show_company_analysis() function in app.py
+# with this version.  Everything else in app.py stays the same.
+# ─────────────────────────────────────────────────────────────────────────────
+
 def show_company_analysis():
-    """Company analysis page"""
+    """Company analysis page – with interactive stock price chart."""
     st.markdown("## 🔍 Company Analysis")
-    
+
     df = st.session_state.db_manager.get_all_companies()
-    
     if df.empty:
         st.info("No companies available. Please collect data first!")
         return
-    
+
     selected_company = st.selectbox(
         "Select Company:",
-        df['symbol'].tolist(),
-        format_func=lambda x: f"{x} - {df[df['symbol']==x]['company_name'].iloc[0]}"
+        df["symbol"].tolist(),
+        format_func=lambda x: f"{x} – {df[df['symbol']==x]['company_name'].iloc[0]}",
     )
-    
-    if selected_company:
-        company_data = df[df['symbol'] == selected_company].iloc[0]
-        
-        st.markdown(f"""
-        <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    border-radius: 15px; color: white; margin-bottom: 2rem;">
+
+    if not selected_company:
+        return
+
+    company_data = df[df["symbol"] == selected_company].iloc[0]
+
+    # ── Hero banner ──────────────────────────────────────────────────────────
+    st.markdown(
+        f"""
+        <div style="text-align:center; padding:2rem;
+                    background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+                    border-radius:15px; color:white; margin-bottom:2rem;">
             <h1>🏢 {company_data['company_name']}</h1>
             <h3>({selected_company})</h3>
             <p>{company_data['sector']} | {company_data['industry']}</p>
         </div>
-        """, unsafe_allow_html=True)
-        
-        # Company metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        metrics = [
-            ("Market Cap", f"${company_data['market_cap']/1e9:.1f}B" if company_data['market_cap'] > 0 else "N/A", "💰"),
-            ("Revenue", f"${company_data['revenue']/1e9:.1f}B" if company_data['revenue'] > 0 else "N/A", "📈"),
-            ("Employees", f"{company_data['employees']:,}" if company_data['employees'] > 0 else "N/A", "👥"),
-            ("P/E Ratio", f"{company_data['pe_ratio']:.2f}" if company_data['pe_ratio'] > 0 else "N/A", "📊")
-        ]
-        
-        for col, (label, value, icon) in zip([col1, col2, col3, col4], metrics):
-            with col:
-                st.markdown(f"""
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Key metrics row ──────────────────────────────────────────────────────
+    col1, col2, col3, col4 = st.columns(4)
+    metrics = [
+        ("Market Cap",  f"${company_data['market_cap']/1e9:.1f}B"  if company_data['market_cap']  > 0 else "N/A", "💰"),
+        ("Revenue",     f"${company_data['revenue']/1e9:.1f}B"     if company_data['revenue']     > 0 else "N/A", "📈"),
+        ("Employees",   f"{company_data['employees']:,}"           if company_data['employees']   > 0 else "N/A", "👥"),
+        ("P/E Ratio",   f"{company_data['pe_ratio']:.2f}"          if company_data['pe_ratio']    > 0 else "N/A", "📊"),
+    ]
+    for col, (label, value, icon) in zip([col1, col2, col3, col4], metrics):
+        with col:
+            st.markdown(
+                f"""
                 <div class="metric-container">
-                    <div style="font-size: 2rem;">{icon}</div>
+                    <div style="font-size:2rem;">{icon}</div>
                     <div class="metric-value">{value}</div>
                     <div class="metric-label">{label}</div>
                 </div>
-                """, unsafe_allow_html=True)
-        
-        # Detailed info
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Company Information")
-            st.write(f"**Sector:** {company_data['sector']}")
-            st.write(f"**Industry:** {company_data['industry']}")
-            st.write(f"**Headquarters:** {company_data['headquarters']}")
-            st.write(f"**Website:** {company_data['website']}")
-        
-        with col2:
-            st.subheader("Financial Metrics")
-            st.write(f"**Current Price:** ${company_data['current_price']:.2f}" if company_data['current_price'] > 0 else "N/A")
-            st.write(f"**Volume:** {company_data['volume']:,}" if company_data['volume'] > 0 else "N/A")
-            st.write(f"**P/B Ratio:** {company_data['pb_ratio']:.2f}" if company_data['pb_ratio'] > 0 else "N/A")
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
+
+    # ── Stock price chart ────────────────────────────────────────────────────
+    st.markdown("### 📈 Stock Price History")
+
+    history_df = st.session_state.db_manager.get_stock_history_by_symbol(selected_company)
+
+    if history_df.empty:
+        st.info(
+            "No price history in the database for this company yet. "
+            "Re-run data collection to populate it."
+        )
+    else:
+        history_df["date"] = pd.to_datetime(history_df["date"])
+        history_df = history_df.sort_values("date")
+
+        # Time-range selector
+        range_options = {"1 Month": 30, "3 Months": 90, "6 Months": 180, "All": None}
+        selected_range = st.radio(
+            "Time range:", list(range_options.keys()), horizontal=True, index=2
+        )
+        days = range_options[selected_range]
+        if days:
+            cutoff = history_df["date"].max() - pd.Timedelta(days=days)
+            history_df = history_df[history_df["date"] >= cutoff]
+
+        # Price direction colour
+        start_price = history_df["close_price"].iloc[0]
+        end_price   = history_df["close_price"].iloc[-1]
+        line_color  = "#00b894" if end_price >= start_price else "#e17055"
+
+        # Candlestick + close-price line toggle
+        chart_type = st.radio("Chart type:", ["Line", "Candlestick"], horizontal=True)
+
+        if chart_type == "Line":
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=history_df["date"],
+                    y=history_df["close_price"],
+                    mode="lines",
+                    name="Close Price",
+                    line=dict(color=line_color, width=2),
+                    fill="tozeroy",
+                    fillcolor=f"rgba({'0,184,148' if line_color == '#00b894' else '225,112,85'},0.08)",
+                )
+            )
+        else:
+            fig = go.Figure(
+                data=[
+                    go.Candlestick(
+                        x=history_df["date"],
+                        open=history_df["open_price"],
+                        high=history_df["high_price"],
+                        low=history_df["low_price"],
+                        close=history_df["close_price"],
+                        name=selected_company,
+                    )
+                ]
+            )
+
+        # Compute % change for the subtitle
+        pct_change = ((end_price - start_price) / start_price) * 100
+        sign = "+" if pct_change >= 0 else ""
+
+        fig.update_layout(
+            title=dict(
+                text=(
+                    f"{company_data['company_name']} ({selected_company})  "
+                    f"<span style='color:{line_color}'>{sign}{pct_change:.1f}%</span>"
+                ),
+                font=dict(size=16),
+            ),
+            xaxis_title="Date",
+            yaxis_title="Price (USD)",
+            height=420,
+            hovermode="x unified",
+            xaxis_rangeslider_visible=(chart_type == "Candlestick"),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Volume bar chart underneath
+        st.markdown("#### 📊 Trading Volume")
+        vol_fig = go.Figure(
+            go.Bar(
+                x=history_df["date"],
+                y=history_df["volume"],
+                marker_color=line_color,
+                opacity=0.6,
+                name="Volume",
+            )
+        )
+        vol_fig.update_layout(
+            height=180,
+            margin=dict(t=10, b=10),
+            xaxis_title="",
+            yaxis_title="Volume",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(vol_fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Detailed info ────────────────────────────────────────────────────────
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Company Information")
+        st.write(f"**Sector:** {company_data['sector']}")
+        st.write(f"**Industry:** {company_data['industry']}")
+        st.write(f"**Headquarters:** {company_data['headquarters']}")
+        st.write(f"**Website:** {company_data['website']}")
+
+    with col2:
+        st.subheader("Financial Metrics")
+        st.write(
+            f"**Current Price:** ${company_data['current_price']:.2f}"
+            if company_data["current_price"] > 0
+            else "**Current Price:** N/A"
+        )
+        st.write(
+            f"**Volume:** {company_data['volume']:,}"
+            if company_data["volume"] > 0
+            else "**Volume:** N/A"
+        )
+        st.write(
+            f"**P/B Ratio:** {company_data['pb_ratio']:.2f}"
+            if company_data["pb_ratio"] > 0
+            else "**P/B Ratio:** N/A"
+        )
 
 def create_market_cap_chart(df):
     """Create market cap chart"""
