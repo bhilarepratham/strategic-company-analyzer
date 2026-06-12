@@ -62,6 +62,17 @@ st.markdown("""
     padding: 1.2rem 1.5rem; border-radius: 0 10px 10px 0;
     color: #333; margin: 1rem 0; font-size: 0.95rem; line-height: 1.6;
 }
+.exec-card {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-left: 4px solid #ff7f0e;
+    padding: 0.9rem 1.2rem; border-radius: 0 8px 8px 0;
+    margin: 0.4rem 0; color: #333;
+}
+.filter-active-badge {
+    background: #ff7f0e; color: white;
+    padding: 0.2rem 0.6rem; border-radius: 12px;
+    font-size: 0.75rem; font-weight: bold;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,9 +85,7 @@ if 'visualizer' not in st.session_state:
 
 
 # =============================================================================
-# CACHING — wraps DB calls so Streamlit skips the query on re-renders.
-# ttl=300 means data is considered fresh for 5 minutes.
-# Call bust_cache() after any write so the next render fetches fresh data.
+# CACHING
 # =============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_get_all_companies():
@@ -90,8 +99,70 @@ def cached_get_stock_history(symbol: str):
 def cached_get_company_count():
     return st.session_state.db_manager.get_company_count()
 
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_executives(symbol: str):
+    return st.session_state.db_manager.get_executives_by_symbol(symbol)
+
 def bust_cache():
     st.cache_data.clear()
+
+
+# =============================================================================
+# SIDEBAR FILTERS  (shared across Dashboard & Visualizations)
+# Returns a filtered DataFrame and the active filter state.
+# =============================================================================
+def render_sidebar_filters(df: pd.DataFrame):
+    """
+    Renders sector + industry multiselects in the sidebar.
+    Returns (filtered_df, filters_are_active).
+    Only shown when there is data to filter.
+    """
+    if df.empty:
+        return df, False
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔍 Filter Companies")
+
+    # Sector multiselect
+    all_sectors = sorted(df['sector'].dropna().unique().tolist())
+    selected_sectors = st.sidebar.multiselect(
+        "Sector",
+        options=all_sectors,
+        default=[],
+        placeholder="All sectors",
+    )
+
+    # Industry multiselect — narrows based on selected sectors
+    if selected_sectors:
+        industry_pool = df[df['sector'].isin(selected_sectors)]['industry'].dropna().unique().tolist()
+    else:
+        industry_pool = df['industry'].dropna().unique().tolist()
+    all_industries = sorted(industry_pool)
+
+    selected_industries = st.sidebar.multiselect(
+        "Industry",
+        options=all_industries,
+        default=[],
+        placeholder="All industries",
+    )
+
+    # Apply filters
+    filtered = df.copy()
+    if selected_sectors:
+        filtered = filtered[filtered['sector'].isin(selected_sectors)]
+    if selected_industries:
+        filtered = filtered[filtered['industry'].isin(selected_industries)]
+
+    filters_active = bool(selected_sectors or selected_industries)
+
+    if filters_active:
+        st.sidebar.markdown(
+            f"Showing **{len(filtered)}** of **{len(df)}** companies",
+        )
+        if st.sidebar.button("✖ Clear filters"):
+            st.rerun()
+
+    return filtered, filters_active
 
 
 # =============================================================================
@@ -129,30 +200,35 @@ def main():
 
 
 # =============================================================================
-# DASHBOARD
+# DASHBOARD  (with sidebar filters)
 # =============================================================================
 def show_dashboard():
     st.markdown("## 🏠 Executive Dashboard")
 
-    all_companies_df = cached_get_all_companies()
-    total_companies  = len(all_companies_df)
+    all_df = cached_get_all_companies()
+
+    # Apply sidebar filters — metrics update to reflect filtered view
+    df, filters_active = render_sidebar_filters(all_df)
+
+    total_companies = len(df)
+    filter_label    = " *(filtered)*" if filters_active else ""
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f"""<div class="metric-container">
             <div style="font-size:2rem;">🏢</div>
             <div class="metric-value">{total_companies}</div>
-            <div class="metric-label">Total Companies</div>
+            <div class="metric-label">Companies{filter_label}</div>
         </div>""", unsafe_allow_html=True)
     with col2:
-        sectors = all_companies_df['sector'].nunique() if not all_companies_df.empty else 0
+        sectors = df['sector'].nunique() if not df.empty else 0
         st.markdown(f"""<div class="metric-container">
             <div style="font-size:2rem;">🏭</div>
             <div class="metric-value">{sectors}</div>
-            <div class="metric-label">Unique Sectors</div>
+            <div class="metric-label">Sectors</div>
         </div>""", unsafe_allow_html=True)
     with col3:
-        avg_cap = f"${all_companies_df['market_cap'].mean()/1e9:.1f}B" if not all_companies_df.empty else "N/A"
+        avg_cap = f"${df['market_cap'].mean()/1e9:.1f}B" if not df.empty else "N/A"
         st.markdown(f"""<div class="metric-container">
             <div style="font-size:2rem;">💰</div>
             <div class="metric-value">{avg_cap}</div>
@@ -167,21 +243,21 @@ def show_dashboard():
 
     st.markdown("---")
 
-    if not all_companies_df.empty:
+    if not df.empty:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("### 📈 Market Leaders")
-            st.plotly_chart(create_market_cap_chart(all_companies_df.head(10)), use_container_width=True)
+            st.plotly_chart(create_market_cap_chart(df.head(10)), use_container_width=True)
         with col2:
             st.markdown("### 🎯 Industry Distribution")
-            st.plotly_chart(create_pie_chart(all_companies_df), use_container_width=True)
+            st.plotly_chart(create_pie_chart(df), use_container_width=True)
 
         st.markdown("### 📋 Company Overview")
-        display_data_table(all_companies_df)
+        display_data_table(df)
 
-        # --- CSV export (all companies) ---
+        # CSV export — exports whatever the current filter shows
         st.markdown("### 💾 Export Data")
-        export_df = all_companies_df.copy()
+        export_df = df.copy()
         export_df['market_cap_B'] = (export_df['market_cap'] / 1e9).round(2)
         export_df['revenue_B']    = (export_df['revenue']    / 1e9).round(2)
         export_cols = [
@@ -190,18 +266,22 @@ def show_dashboard():
             'pe_ratio', 'pb_ratio', 'dividend_yield', 'website', 'last_updated',
         ]
         export_cols = [c for c in export_cols if c in export_df.columns]
+        label = f"⬇️ Download {'Filtered' if filters_active else 'All'} Companies as CSV"
         st.download_button(
-            label="⬇️ Download All Companies as CSV",
+            label=label,
             data=export_df[export_cols].to_csv(index=False),
             file_name=f"companies_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
         )
     else:
-        st.markdown("""<div class="info-box">
-            <h3>🚀 Welcome to Your Analytics Platform!</h3>
-            <p>Head over to <strong>Data Collection</strong> to gather your first dataset.</p>
-            <p>✨ <i>Pro tip: Start with the Technology sector for rich data!</i></p>
-        </div>""", unsafe_allow_html=True)
+        if filters_active:
+            st.info("No companies match the current filters. Try broadening your selection in the sidebar.")
+        else:
+            st.markdown("""<div class="info-box">
+                <h3>🚀 Welcome to Your Analytics Platform!</h3>
+                <p>Head over to <strong>Data Collection</strong> to gather your first dataset.</p>
+                <p>✨ <i>Pro tip: Start with the Technology sector for rich data!</i></p>
+            </div>""", unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -210,9 +290,9 @@ def show_dashboard():
 def show_data_collection():
     st.markdown("## 📥 Data Collection Center")
 
-    total_companies    = cached_get_company_count()
-    target             = 150   # 6 sectors x 25 companies
-    progress_pct       = min((total_companies / target) * 100, 100)
+    total_companies = cached_get_company_count()
+    target          = 150
+    progress_pct    = min((total_companies / target) * 100, 100)
 
     st.markdown(f"""<div class="info-box">
         <h4>📊 Collection Progress: {progress_pct:.1f}%</h4>
@@ -281,9 +361,8 @@ def refresh_prices():
     stale = df[df["last_updated"].apply(
         lambda ts: st.session_state.data_collector.needs_refresh(ts, hours=24)
     )]
-
     if stale.empty:
-        st.success("✅ All data is up-to-date (refreshed within the last 24 hours).")
+        st.success("✅ All data is up-to-date.")
         return
 
     st.info(f"🔄 Refreshing {len(stale)} stale companies…")
@@ -294,7 +373,6 @@ def refresh_prices():
     for i, row in enumerate(stale.itertuples(), 1):
         progress.progress(i / len(stale))
         status.text(f"Refreshing {row.symbol}… ({i}/{len(stale)})")
-
         fresh = st.session_state.data_collector.refresh_company_data(row.symbol)
         if fresh:
             conn = sqlite3.connect(st.session_state.db_manager.db_path)
@@ -334,17 +412,16 @@ def collect_industry_data(industry):
 
     st.markdown(f"""<div class="info-box">
         <h4>🌐 Data Collection in Progress</h4>
-        <p>Collecting from: Yahoo Finance API + Web Scraping</p>
         <p>Companies to process: {len(companies)}</p>
     </div>""", unsafe_allow_html=True)
 
-    progress_bar   = st.progress(0)
-    status_text    = st.empty()
-    col1, col2, col3 = st.columns(3)
-    success_metric = col1.empty()
-    failed_metric  = col2.empty()
-    current_metric = col3.empty()
-    details        = st.expander("📋 Collection Details", expanded=False)
+    progress_bar      = st.progress(0)
+    status_text       = st.empty()
+    col1, col2, col3  = st.columns(3)
+    success_metric    = col1.empty()
+    failed_metric     = col2.empty()
+    current_metric    = col3.empty()
+    details           = st.expander("📋 Collection Details", expanded=False)
 
     successful, failed, failed_companies = 0, 0, []
 
@@ -360,9 +437,9 @@ def collect_industry_data(industry):
         current_metric.metric("📊 Progress", f"{i+1}/{len(companies)}")
 
         try:
-            company_data = st.session_state.data_collector.get_company_basic_info(symbol)
-            if company_data:
-                st.session_state.db_manager.insert_company_data(company_data)
+            data = st.session_state.data_collector.get_company_basic_info(symbol)
+            if data:
+                st.session_state.db_manager.insert_company_data(data)
                 try:
                     execs = st.session_state.data_collector.get_executives(symbol)
                     if execs:
@@ -382,7 +459,7 @@ def collect_industry_data(industry):
                 except Exception as e:
                     with details: st.warning(f"Stock history skipped for {symbol}: {e}")
                 successful += 1
-                with details: st.success(f"✅ {symbol} — collected successfully")
+                with details: st.success(f"✅ {symbol} — collected")
             else:
                 failed += 1
                 failed_companies.append(symbol)
@@ -399,12 +476,12 @@ def collect_industry_data(industry):
     if successful > 0:
         status_text.markdown(f"""<div class="success-box">
             <h3>✅ Collection Complete!</h3>
-            <p>Successfully collected: {successful} companies | Failed: {failed}</p>
+            <p>Collected: {successful} | Failed: {failed}</p>
         </div>""", unsafe_allow_html=True)
     else:
         status_text.markdown("""<div class="error-box">
             <h3>❌ Collection Failed</h3>
-            <p>No data could be collected. Please check your internet connection.</p>
+            <p>No data could be collected. Check your internet connection.</p>
         </div>""", unsafe_allow_html=True)
 
     if failed_companies:
@@ -419,7 +496,6 @@ def collect_custom_data(symbols):
     progress_bar = st.progress(0)
     status_text  = st.empty()
     successful, failed = 0, 0
-
     for i, symbol in enumerate(symbols):
         progress_bar.progress((i + 1) / len(symbols))
         status_text.text(f"Processing {symbol}… ({i+1}/{len(symbols)})")
@@ -434,25 +510,26 @@ def collect_custom_data(symbols):
         except Exception as e:
             failed += 1
             st.warning(f"Error with {symbol}: {str(e)}")
-
     progress_bar.progress(1.0)
     bust_cache()
     status_text.success(f"✅ Complete! Success: {successful}, Failed: {failed}")
 
 
 # =============================================================================
-# VISUALIZATIONS
+# VISUALIZATIONS  (also uses sidebar filters)
 # =============================================================================
 def show_visualizations():
     st.markdown("## 📊 Data Visualizations")
-    df = cached_get_all_companies()
+    all_df = cached_get_all_companies()
 
-    if df.empty:
+    if all_df.empty:
         st.markdown("""<div class="info-box">
             <h3>📝 No Data Available</h3>
             <p>Please collect some company data first!</p>
         </div>""", unsafe_allow_html=True)
         return
+
+    df, _ = render_sidebar_filters(all_df)
 
     viz_type = st.selectbox("Choose Visualization:",
                             ["Market Cap Analysis", "Industry Analysis", "Performance Dashboard"])
@@ -483,18 +560,21 @@ def show_visualizations():
                     dv, x='revenue_billions', y='market_cap_billions',
                     size='employees', color='sector', hover_name='company_name',
                     title="Market Cap vs Revenue",
-                    labels={'revenue_billions': 'Revenue (B USD)', 'market_cap_billions': 'Market Cap (B USD)'}
+                    labels={'revenue_billions': 'Revenue (B USD)',
+                            'market_cap_billions': 'Market Cap (B USD)'}
                 ), use_container_width=True)
         with col2:
             st.markdown("#### 📊 P/E Ratio Distribution")
             pe = df[(df['pe_ratio'] > 0) & (df['pe_ratio'] < 100)]
             if not pe.empty:
-                st.plotly_chart(px.histogram(pe, x='pe_ratio', nbins=20,
-                                             title="P/E Ratio Distribution"), use_container_width=True)
+                st.plotly_chart(
+                    px.histogram(pe, x='pe_ratio', nbins=20, title="P/E Ratio Distribution"),
+                    use_container_width=True
+                )
 
 
 # =============================================================================
-# COMPANY ANALYSIS
+# COMPANY ANALYSIS  (with description + executives table)
 # =============================================================================
 def show_company_analysis():
     st.markdown("## 🔍 Company Analysis")
@@ -512,10 +592,10 @@ def show_company_analysis():
     if not selected:
         return
 
-    cd = df[df["symbol"] == selected].iloc[0]   # company_data shorthand
-
-    # Hero banner with last-updated timestamp
+    cd = df[df["symbol"] == selected].iloc[0]
     last_updated = cd.get("last_updated", "Unknown")
+
+    # Hero banner
     st.markdown(f"""
     <div style="text-align:center; padding:2rem;
                 background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
@@ -546,7 +626,7 @@ def show_company_analysis():
 
     st.markdown("---")
 
-    # --- Company description (NEW) ---
+    # About / description
     description = cd.get("description", "")
     if description and description not in ("N/A", "", None):
         st.markdown("### 📖 About")
@@ -558,7 +638,7 @@ def show_company_analysis():
     history_df = cached_get_stock_history(selected)
 
     if history_df.empty:
-        st.info("No price history in the database yet. Re-run data collection to populate it.")
+        st.info("No price history yet. Re-run data collection to populate it.")
     else:
         history_df["date"] = pd.to_datetime(history_df["date"])
         history_df = history_df.sort_values("date")
@@ -567,7 +647,9 @@ def show_company_analysis():
         sel_range  = st.radio("Time range:", list(range_opts.keys()), horizontal=True, index=2)
         days = range_opts[sel_range]
         if days:
-            history_df = history_df[history_df["date"] >= history_df["date"].max() - pd.Timedelta(days=days)]
+            history_df = history_df[
+                history_df["date"] >= history_df["date"].max() - pd.Timedelta(days=days)
+            ]
 
         start_price = history_df["close_price"].iloc[0]
         end_price   = history_df["close_price"].iloc[-1]
@@ -607,7 +689,6 @@ def show_company_analysis():
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Volume chart
         st.markdown("#### 📊 Trading Volume")
         vol_fig = go.Figure(go.Bar(
             x=history_df["date"], y=history_df["volume"],
@@ -619,7 +700,6 @@ def show_company_analysis():
         )
         st.plotly_chart(vol_fig, use_container_width=True)
 
-        # --- CSV export for this company's price history (NEW) ---
         exp = history_df[["date","open_price","high_price","low_price","close_price","volume"]].copy()
         exp.columns = ["Date","Open","High","Low","Close","Volume"]
         st.download_button(
@@ -628,6 +708,45 @@ def show_company_analysis():
             file_name=f"{selected}_price_history_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
         )
+
+    st.markdown("---")
+
+    # ── Executives table (NEW) ─────────────────────────────────────────────────
+    st.markdown("### 👔 Executive Leadership")
+    exec_df = cached_get_executives(selected)
+
+    if exec_df.empty:
+        st.info("No executive data available for this company yet. Re-run data collection to populate it.")
+    else:
+        # Format total_pay nicely
+        def fmt_pay(val):
+            if val and val > 0:
+                return f"${val/1e6:.2f}M" if val >= 1e6 else f"${val:,.0f}"
+            return "N/A"
+
+        for _, row in exec_df.iterrows():
+            age_str = f"Age {int(row['age'])}" if row.get('age') and row['age'] > 0 else ""
+            pay_str = fmt_pay(row.get('total_pay', 0))
+            st.markdown(f"""
+            <div class="exec-card">
+                <strong>{row['name']}</strong>
+                &nbsp;·&nbsp; <span style="color:#555;">{row['title']}</span>
+                &nbsp;&nbsp;
+                <span style="float:right; color:#888; font-size:0.85rem;">
+                    {age_str}{"&nbsp;&nbsp;|&nbsp;&nbsp;" if age_str else ""}
+                    💼 Total Pay: <strong>{pay_str}</strong>
+                </span>
+            </div>""", unsafe_allow_html=True)
+
+        # Also offer a clean table view
+        with st.expander("📋 Table view"):
+            display_exec = exec_df.copy()
+            display_exec['total_pay'] = display_exec['total_pay'].apply(fmt_pay)
+            display_exec['age'] = display_exec['age'].apply(
+                lambda x: int(x) if x and x > 0 else "N/A"
+            )
+            display_exec.columns = ["Name", "Title", "Age", "Total Pay"]
+            st.dataframe(display_exec, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
