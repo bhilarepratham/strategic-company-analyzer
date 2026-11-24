@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from datetime import datetime, timedelta
+from io import StringIO
 from typing import Dict, List, Optional
 import json
 import re
@@ -288,3 +289,48 @@ class CompanyDataCollector:
 
     def rate_limit_wait(self, seconds: float = 1):
         time.sleep(seconds)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # DISCOVERY – find companies beyond the built-in industry lists
+    # ─────────────────────────────────────────────────────────────────────────
+    SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+    def get_sp500_constituents(self) -> pd.DataFrame:
+        """
+        Current S&P 500 members with their GICS sector.
+        Returns columns: symbol, name, gics_sector, gics_sub_industry
+        (empty DataFrame if the list can't be fetched).
+        """
+        try:
+            resp = self.session.get(self.SP500_URL, timeout=15)
+            resp.raise_for_status()
+            table = pd.read_html(StringIO(resp.text))[0]
+            table = table.rename(columns={
+                "Symbol": "symbol",
+                "Security": "name",
+                "GICS Sector": "gics_sector",
+                "GICS Sub-Industry": "gics_sub_industry",
+            })
+            # Yahoo uses dashes for share classes (BRK.B -> BRK-B)
+            table["symbol"] = table["symbol"].astype(str).str.replace(".", "-", regex=False)
+            return table[["symbol", "name", "gics_sector", "gics_sub_industry"]]
+        except Exception as e:
+            print(f"  [ERROR] Could not load S&P 500 list: {e}")
+            return pd.DataFrame(columns=["symbol", "name", "gics_sector", "gics_sub_industry"])
+
+    def search_companies(self, query: str, max_results: int = 8) -> List[Dict]:
+        """Search Yahoo Finance for listed companies by name or ticker."""
+        try:
+            results = yf.Search(query, max_results=max_results).quotes
+            companies = []
+            for q in results:
+                if q.get("quoteType") == "EQUITY" and q.get("symbol"):
+                    companies.append({
+                        "symbol": q["symbol"],
+                        "name": q.get("longname") or q.get("shortname") or q["symbol"],
+                        "exchange": q.get("exchDisp", ""),
+                    })
+            return companies
+        except Exception as e:
+            print(f"  [ERROR] Company search failed for '{query}': {e}")
+            return []
