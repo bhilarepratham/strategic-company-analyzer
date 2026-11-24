@@ -3,6 +3,7 @@
 Usage:
     python collect_all.py          # collect missing companies, refresh existing ones
     python collect_all.py --full   # re-collect everything from scratch
+    python collect_all.py --sp500  # also add up to 100 new S&P 500 companies per run
 """
 import sqlite3
 import sys
@@ -13,6 +14,7 @@ from database_manager import DatabaseManager
 
 INDUSTRIES = ["technology", "finance", "healthcare", "retail", "energy", "automotive"]
 DELAY = 0.5  # seconds between companies, to be gentle with Yahoo Finance
+SP500_BATCH = 100  # new S&P 500 companies added per run (keeps runs short)
 
 
 def collect_full(collector, db, symbol):
@@ -80,6 +82,18 @@ def main():
             else:
                 success = refresh_existing(collector, db, symbol)
             if success:
+                ok += 1
+            else:
+                failed.append(symbol)
+            time.sleep(DELAY)
+
+    if "--sp500" in sys.argv:
+        sp = collector.get_sp500_constituents()
+        have = set(db.get_all_companies()["symbol"].tolist())
+        todo = [s for s in sp["symbol"].tolist() if s not in have][:SP500_BATCH]
+        print(f"\n=== S&P 500 (adding up to {SP500_BATCH} new companies; {len(todo)} queued) ===")
+        for symbol in todo:
+            if collect_full(collector, db, symbol):
                 ok += 1
             else:
                 failed.append(symbol)
