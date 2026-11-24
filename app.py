@@ -103,6 +103,10 @@ def cached_get_company_count():
 def cached_get_executives(symbol: str):
     return st.session_state.db_manager.get_executives_by_symbol(symbol)
 
+@st.cache_data(ttl=86400, show_spinner="Loading S&P 500 list…")
+def cached_get_sp500():
+    return st.session_state.data_collector.get_sp500_constituents()
+
 def bust_cache():
     st.cache_data.clear()
 
@@ -349,6 +353,51 @@ def show_data_collection():
         },
     )
 
+    # --- Discovery: go beyond the built-in industry lists ---
+    st.markdown("### 🌐 Discover More Companies")
+    tab_sp, tab_search = st.tabs(["S&P 500 by sector", "Search by name"])
+
+    with tab_sp:
+        sp_df = cached_get_sp500()
+        if sp_df.empty:
+            st.warning("Couldn't load the S&P 500 list right now. "
+                       "Try again later, or add companies by symbol below.")
+        else:
+            sp_sector = st.selectbox(
+                "S&P 500 sector", sorted(sp_df["gics_sector"].dropna().unique()), key="sp_sector"
+            )
+            sector_syms = sp_df[sp_df["gics_sector"] == sp_sector]["symbol"].tolist()
+            sp_missing  = [s for s in sector_syms if s not in collected]
+            st.caption(f"{len(sp_missing)} of {len(sector_syms)} {sp_sector} companies "
+                       "are not collected yet.")
+            batch = st.number_input(
+                "How many to collect now",
+                min_value=1,
+                max_value=max(1, len(sp_missing)),
+                value=min(10, max(1, len(sp_missing))),
+                key="sp_batch",
+                disabled=not sp_missing,
+                help="Collect in small batches to stay within Yahoo Finance rate limits.",
+            )
+            if st.button(f"📥 Collect {int(batch)} {sp_sector} companies",
+                         disabled=not sp_missing, key="sp_go"):
+                collect_custom_data(sp_missing[:int(batch)])
+
+    with tab_search:
+        query = st.text_input("Company name or ticker", key="search_q",
+                              placeholder="e.g. Shopify, Palantir, Toyota")
+        if query:
+            matches = st.session_state.data_collector.search_companies(query)
+            if not matches:
+                st.info("No matching listed companies found.")
+            else:
+                labels = {m["symbol"]: f"{m['symbol']} — {m['name']} ({m['exchange']})"
+                          for m in matches}
+                picks = st.multiselect("Select companies to add", list(labels),
+                                       format_func=lambda s: labels[s], key="search_picks")
+                if st.button("📥 Collect selected", disabled=not picks, key="search_go"):
+                    collect_custom_data(picks)
+
     st.markdown("### 🎯 Custom Company Analysis")
     custom_symbols = st.text_input(
         "Enter stock symbols (comma-separated):",
@@ -553,7 +602,24 @@ def collect_custom_data(symbols):
         try:
             data = st.session_state.data_collector.get_company_basic_info(symbol)
             if data:
-                st.session_state.db_manager.insert_company_data(data)
+                dc, dbm = st.session_state.data_collector, st.session_state.db_manager
+                dbm.insert_company_data(data)
+                # Also store executives, ratios and price history so the
+                # Company Analysis page works fully for these companies.
+                for fetch, store in ((dc.get_executives, dbm.insert_executives),
+                                     (dc.get_financial_ratios, dbm.insert_financial_ratios)):
+                    try:
+                        extra = fetch(symbol)
+                        if extra:
+                            store(symbol, extra)
+                    except Exception as e:
+                        st.caption(f"{symbol}: some extra data skipped ({e})")
+                try:
+                    hist = dc.get_stock_history(symbol)
+                    if not hist.empty:
+                        dbm.insert_stock_history(symbol, hist)
+                except Exception as e:
+                    st.caption(f"{symbol}: price history skipped ({e})")
                 successful += 1
             else:
                 failed += 1
