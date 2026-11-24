@@ -19,6 +19,7 @@ A Python-based financial intelligence platform that automatically collects, stor
 - Stale-data warning banner shows how many companies haven't been updated in 24+ hours
 - Detailed per-symbol progress with expandable error log
 - **🗂️ Collection Coverage** table shows, per industry, how many of its 25 tickers are already in the database
+- **🌐 Discover More Companies** — go beyond the built-in lists: browse the full **S&P 500 by sector** and collect companies in small batches, or **search any listed company by name or ticker** and add it. Custom additions get full data (executives, ratios, 1-year price history)
 - **"Only collect companies not already in the database"** (on by default) skips existing companies, so re-running an industry only fetches what's missing and never wastes API calls; untick it to force a full re-collect
 
 ### 📊 Visualizations
@@ -86,6 +87,9 @@ streamlit run app.py
 ### Deployment (Streamlit Community Cloud)
 The app is deployed from this repo. Streamlit Cloud's filesystem is not persistent, so the SQLite file committed to the repo (`company_data.db`) is what the live app starts with. To publish fresh data: run the app locally, use **Collect** and **Refresh Prices**, then commit the updated `company_data.db` and push.
 
+### Automated data updates (GitHub Actions)
+`.github/workflows/update-data.yml` runs `collect_all.py --sp500` on weekdays (or on demand from the Actions tab). Each run refreshes prices for every company already tracked and adds up to 100 new S&P 500 companies, so the database grows toward the full index over time. The updated `company_data.db` is committed automatically.
+
 ### Requirements
 ```
 streamlit
@@ -94,6 +98,7 @@ pandas
 plotly
 requests
 beautifulsoup4
+lxml
 ```
 
 ---
