@@ -322,6 +322,33 @@ def show_data_collection():
         st.info("**Data Points:** 20+")
         st.info("**Update:** Real-time")
 
+    # --- Coverage: how many of each industry's tickers are already collected ---
+    all_df    = cached_get_all_companies()
+    collected = set(all_df["symbol"].tolist()) if not all_df.empty else set()
+
+    st.markdown("### 🗂️ Collection Coverage")
+    cov_rows = []
+    for key in industries:
+        tickers = st.session_state.data_collector.search_companies_by_industry(key)
+        have = len([t for t in tickers if t in collected])
+        cov_rows.append({
+            "Industry": key.title(),
+            "Collected": have,
+            "Total": len(tickers),
+            "Missing": len(tickers) - have,
+            "Progress": round(have / len(tickers) * 100) if tickers else 0,
+        })
+    st.dataframe(
+        pd.DataFrame(cov_rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Progress": st.column_config.ProgressColumn(
+                "Progress", min_value=0, max_value=100, format="%d%%"
+            )
+        },
+    )
+
     st.markdown("### 🎯 Custom Company Analysis")
     custom_symbols = st.text_input(
         "Enter stock symbols (comma-separated):",
@@ -329,10 +356,31 @@ def show_data_collection():
     )
 
     st.markdown("### 🚀 Data Collection Actions")
+    skip_existing = st.checkbox(
+        "Only collect companies not already in the database",
+        value=True,
+        help="Prevents accidentally re-hitting the API for companies you already have. "
+             "Untick to re-collect the whole industry.",
+    )
+    industry_tickers = st.session_state.data_collector.search_companies_by_industry(industry)
+    missing_tickers  = [t for t in industry_tickers if t not in collected]
+    if skip_existing:
+        st.caption(f"{len(missing_tickers)} of {len(industry_tickers)} "
+                   f"{industry} companies still to collect.")
+    else:
+        st.caption(f"⚠️ Will re-collect all {len(industry_tickers)} {industry} companies.")
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button(f"📊 Collect {industry.title()} Data", type="primary", use_container_width=True):
-            collect_industry_data(industry)
+        nothing_to_do = skip_existing and not missing_tickers
+        if st.button(
+            f"📊 Collect {industry.title()} Data",
+            type="primary",
+            use_container_width=True,
+            disabled=nothing_to_do,
+            help="All companies in this industry are already collected." if nothing_to_do else None,
+        ):
+            collect_industry_data(industry, only_missing=skip_existing)
     with col2:
         if st.button("🎯 Collect Custom Data", disabled=not custom_symbols, use_container_width=True):
             collect_custom_data([s.strip().upper() for s in custom_symbols.split(',')])
@@ -404,10 +452,13 @@ def refresh_prices():
     st.success(f"✅ Refreshed {refreshed} / {len(stale)} companies.")
 
 
-def collect_industry_data(industry):
+def collect_industry_data(industry, only_missing=False):
     companies = st.session_state.data_collector.search_companies_by_industry(industry)
+    if only_missing:
+        have = set(st.session_state.db_manager.get_all_companies()["symbol"].tolist())
+        companies = [c for c in companies if c not in have]
     if not companies:
-        st.error("No companies found!")
+        st.info("Nothing to collect — every company in this industry is already in the database.")
         return
 
     st.markdown(f"""<div class="info-box">
