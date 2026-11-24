@@ -1,0 +1,39 @@
+name: Update company data
+
+on:
+  workflow_dispatch:        # "Run workflow" button in the Actions tab
+  schedule:
+    - cron: "17 23 * * 1-5" # weekdays, after US market close (UTC)
+
+permissions:
+  contents: write           # lets the job commit the updated database
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Collect and refresh data
+        run: python collect_all.py
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add company_data.db
+          if git diff --staged --quiet; then
+            echo "No data changes to commit."
+          else
+            git commit -m "Update company data [skip ci]"
+            git push
+          fi
