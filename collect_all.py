@@ -15,6 +15,7 @@ from database_manager import DatabaseManager
 INDUSTRIES = ["technology", "finance", "healthcare", "retail", "energy", "automotive"]
 DELAY = 0.5  # seconds between companies, to be gentle with Yahoo Finance
 SP500_BATCH = 100  # new S&P 500 companies added per run (keeps runs short)
+MAX_CONSECUTIVE_FAILURES = 8  # abort early if this many in a row fail and none have worked
 
 
 def collect_full(collector, db, symbol):
@@ -73,7 +74,24 @@ def main():
     db = DatabaseManager()
     have = set(db.get_all_companies()["symbol"].tolist())
 
-    ok, failed = 0, []
+    ok, failed, streak = 0, [], 0
+
+    def record(success, symbol):
+        """Count the result; bail out early if Yahoo is clearly rejecting us."""
+        nonlocal ok, streak
+        if success:
+            ok += 1
+            streak = 0
+        else:
+            failed.append(symbol)
+            streak += 1
+            if streak >= MAX_CONSECUTIVE_FAILURES and ok == 0:
+                print(f"\n[ABORT] The first {streak} requests all failed. Yahoo Finance is "
+                      "probably blocking or rate-limiting this machine (HTTP 429 / empty "
+                      "responses). Check the [ERROR] lines above, then re-run later or "
+                      "collect locally.")
+                sys.exit(1)
+
     for industry in INDUSTRIES:
         print(f"\n=== {industry.upper()} ===")
         for symbol in collector.search_companies_by_industry(industry):
@@ -81,10 +99,7 @@ def main():
                 success = collect_full(collector, db, symbol)
             else:
                 success = refresh_existing(collector, db, symbol)
-            if success:
-                ok += 1
-            else:
-                failed.append(symbol)
+            record(success, symbol)
             time.sleep(DELAY)
 
     if "--sp500" in sys.argv:
@@ -93,10 +108,7 @@ def main():
         todo = [s for s in sp["symbol"].tolist() if s not in have][:SP500_BATCH]
         print(f"\n=== S&P 500 (adding up to {SP500_BATCH} new companies; {len(todo)} queued) ===")
         for symbol in todo:
-            if collect_full(collector, db, symbol):
-                ok += 1
-            else:
-                failed.append(symbol)
+            record(collect_full(collector, db, symbol), symbol)
             time.sleep(DELAY)
 
     total = db.get_company_count()
