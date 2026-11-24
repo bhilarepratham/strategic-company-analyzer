@@ -211,7 +211,7 @@ def show_dashboard():
     df, filters_active = render_sidebar_filters(all_df)
 
     total_companies = len(df)
-    filter_label    = " *(filtered)*" if filters_active else ""
+    filter_label    = " (filtered)" if filters_active else ""
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -731,11 +731,10 @@ def show_company_analysis():
             <div class="exec-card">
                 <strong>{row['name']}</strong>
                 &nbsp;·&nbsp; <span style="color:#555;">{row['title']}</span>
-                &nbsp;&nbsp;
-                <span style="float:right; color:#888; font-size:0.85rem;">
+                <div style="color:#777; font-size:0.85rem; margin-top:0.3rem;">
                     {age_str}{"&nbsp;&nbsp;|&nbsp;&nbsp;" if age_str else ""}
                     💼 Total Pay: <strong>{pay_str}</strong>
-                </span>
+                </div>
             </div>""", unsafe_allow_html=True)
 
         # Also offer a clean table view
@@ -763,7 +762,7 @@ def show_company_analysis():
         st.write(f"**Current Price:** ${cd['current_price']:.2f}" if cd["current_price"] > 0 else "**Current Price:** N/A")
         st.write(f"**Volume:** {cd['volume']:,.0f}"               if cd["volume"]        > 0 else "**Volume:** N/A")
         st.write(f"**P/B Ratio:** {cd['pb_ratio']:.2f}"           if cd["pb_ratio"]      > 0 else "**P/B Ratio:** N/A")
-        st.write(f"**Dividend Yield:** {cd['dividend_yield']*100:.2f}%" if cd["dividend_yield"] > 0 else "**Dividend Yield:** N/A")
+        st.write(f"**Dividend Yield:** {cd['dividend_yield']:.2f}%" if cd["dividend_yield"] > 0 else "**Dividend Yield:** N/A")
 
 
 # =============================================================================
