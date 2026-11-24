@@ -24,7 +24,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Collect and refresh data
-        run: python collect_all.py
+        run: python collect_all.py --sp500
 
       - name: Commit updated database
         run: |
